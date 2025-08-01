@@ -1,0 +1,1006 @@
+// ===================================================================
+// 게임 설정 및 전역 변수
+// ===================================================================
+let camRotationSpeed = 0.03; let camAngleX = 0; let camAngleY = 0; let camDist = 350;
+let cameraPosition;
+
+let camShakeMagnitude = 0;
+let camShakeDuration = 0;
+let camShakeStartTime = 0;
+
+let player;
+let monsters = [];
+let projectiles = [];
+let visualEffects = [];
+let hazards = [];
+let boss = null;
+
+let wallSize = 3000; let wallHeight = 200; let lobbyWallSize = 1000;
+
+let currentStage = 1; let monsterStatMultiplier = 1.0;
+let gameCycle = 1;
+
+let gameState = 'LOBBY';
+let gameStartPortal;
+let shop;
+let npc;
+
+let survivalTimer = 0;
+let bossSpawnTimer = 0;
+const BOSS_SPAWN_INTERVAL = 90 * 60; 
+
+// ===================================================================
+// 아이템 데이터베이스 및 가격 정책
+// ===================================================================
+const WEAPON_DATA = {
+    '검': { baseDamage: 10 }, '대검': { baseDamage: 25 }, '해머': { baseDamage: 22 },
+    '활': { baseDamage: 8 }, '요도': { baseDamage: 35 },
+    '영혼의 대검': { baseDamage: 40, skill: 'SoulRiftSkill' },
+    '거인의 핵 해머': { baseDamage: 45, skill: 'GroundSlamSkill' },
+    '심연의 독이빨': { baseDamage: 30, skill: 'PoisonNovaSkill' },
+    '리치의 지팡이': { baseDamage: 38, skill: 'SummonUndeadSkill' },
+    '강철 파쇄기': { baseDamage: 50, skill: 'OverdriveSkill' },
+    '서리 거인의 도끼': { baseDamage: 48, skill: 'FrostBreathSkill' },
+    '화염 군주의 검': { baseDamage: 55, skill: 'MeteorSwarmSkill' },
+    '그림자 비수': { baseDamage: 42, skill: 'ShadowCloneSkill' },
+    '공허의 눈': { baseDamage: 60, skill: 'VoidBeamSkill' },
+    '천공의 발톱': { baseDamage: 65, skill: 'LightningStrikeSkill' }
+};
+const ARMOR_DATA = { '투구': { baseDefense: 5 }, '흉갑': { baseDefense: 12 }, '경갑': { baseDefense: 8 } };
+const TIER_PRICES = {
+    '커먼': {min: 50, max: 150}, '언커먼': {min: 300, max: 400}, '레어': {min: 700, max: 1000},
+    '에픽': {min: 3000, max: 5000}, '신화': {min: 6000, max: 8000}, '전설': {min: 9000, max: 11000},
+    '레전더리': {min: 12000, max: 15000}, 'GOD': {min: 13000, max: 20000}
+};
+const BOSS_WEAPON_NAMES = [
+    '영혼의 대검', '거인의 핵 해머', '심연의 독이빨', '리치의 지팡이', '강철 파쇄기',
+    '서리 거인의 도끼', '화염 군주의 검', '그림자 비수', '공허의 눈', '천공의 발톱', '요도'
+];
+
+
+// ===================================================================
+// ★★★★★ 모든 클래스 선언부 (올바른 순서로 재배치됨) ★★★★★
+// ===================================================================
+
+// ----------------------------------
+// 1. 가장 기본적인 데이터/유틸리티 클래스
+// ----------------------------------
+function getTier() {
+    let roll = random(100);
+    if (roll < 0.0000981) return { name: 'GOD', color: [255, 215, 0], multiplier: 50 };
+    if (roll < 0.0000981 + 0.35) return { name: '레전더리', color: [255, 105, 180], multiplier: 25 };
+    if (roll < 0.35 + 0.6) return { name: '전설', color: [138, 43, 226], multiplier: 12 };
+    if (roll < 0.6 + 3) return { name: '신화', color: [255, 69, 0], multiplier: 7 };
+    if (roll < 3 + 16) return { name: '에픽', color: [186, 85, 211], multiplier: 4 };
+    if (roll < 16 + 25) return { name: '레어', color: [0, 112, 255], multiplier: 2.5 };
+    if (roll < 25 + 30) return { name: '언커먼', color: [30, 255, 0], multiplier: 1.5 };
+    return { name: '커먼', color: [255, 255, 255], multiplier: 1 };
+}
+
+class Weapon {
+    constructor(name = null) {
+        this.tier = getTier();
+        if (name && WEAPON_DATA[name]) {
+            this.name = name;
+            let data = WEAPON_DATA[name];
+            this.baseDamage = data.baseDamage;
+            this.skill = data.skill || null;
+        } else {
+            let keys = Object.keys(WEAPON_DATA).filter(k => !BOSS_WEAPON_NAMES.includes(k));
+            this.name = random(keys);
+            this.baseDamage = WEAPON_DATA[this.name].baseDamage;
+            this.skill = null;
+        }
+        this.damage = this.baseDamage * this.tier.multiplier;
+        this.price = floor(random(TIER_PRICES[this.tier.name].min, TIER_PRICES[this.tier.name].max));
+    }
+}
+
+class Armor {
+    constructor() {
+        this.part = random(Object.keys(ARMOR_DATA));
+        this.name = this.part;
+        this.tier = getTier();
+        this.baseDefense = ARMOR_DATA[this.part].baseDefense;
+        this.defense = this.baseDefense * this.tier.multiplier;
+        this.price = floor(random(TIER_PRICES[this.tier.name].min, TIER_PRICES[this.tier.name].max));
+    }
+}
+
+class Skill {
+    constructor(name, manaCost, cooldown) {
+        this.name = name;
+        this.manaCost = manaCost;
+        this.cooldown = cooldown;
+        this.lastUsedTime = -cooldown;
+    }
+    isReady() { return millis() - this.lastUsedTime > this.cooldown; }
+    activate(player) {
+        if (!this.isReady() || player.mana < this.manaCost) return false;
+        player.mana -= this.manaCost;
+        this.lastUsedTime = millis();
+        console.log(`${this.name} 발동!`);
+        return true;
+    }
+}
+
+class Attack {
+    constructor(x, y, z, damage, stunDuration = 0) {
+        this.pos = createVector(x, y-80, z);
+        this.size = 120;
+        this.startTime = millis(); this.damage = damage;
+        this.stunDuration = stunDuration;
+    }
+    hits(target) {
+        if (!target || target.isDodging || target.hp <= 0) return false;
+        let d = dist(this.pos.x, this.pos.z, target.x, target.z);
+        return d < this.size / 2 + target.bodyWidth / 2;
+    }
+}
+
+// ----------------------------------
+// 2. 캐릭터 기본 클래스 (Character)
+// ----------------------------------
+class Character {
+    constructor(x, y, z) {
+        this.x = x; this.groundY = y; this.z = z; this.y = this.groundY;
+        this.speed = 3; this.maxHp = 100; this.hp = this.maxHp;
+        this.currentAngle = 0; this.targetAngle = 0;
+        this.isMoving = false; this.isAttacking = false; this.attackType = 'none'; this.attackStartTime = 0; this.attackDuration = 500;
+        this.isDodging = false; this.dodgeStartTime = 0; this.dodgeDuration = 400;
+        this.dodgeSpeed = 10;
+        this.dodgeDirection = createVector(0,0,1);
+        this.lastDodgeTime = -15000;
+        this.dodgeCooldown = 15000; 
+        this.isStunned = false; this.stunEndTime = 0;
+        this.bodyColor = [180, 50, 50];
+        this.bodyHeight = 80; this.bodyWidth = 40; this.headSize = 35; this.limbWidth = 15;
+        this.upperArmLength = 35; this.lowerArmLength = 35; this.upperLegLength = 40; this.lowerLegLength = 40;
+        this.legLength = this.upperLegLength + this.lowerLegLength;
+    }
+
+    takeDamage(amount, attacker) {
+        if (this.isDodging) return;
+        this.hp -= amount;
+        if(this.hp < 0) this.hp = 0;
+        visualEffects.push(new DamageIndicator(this.x, this.y - this.legLength - this.bodyHeight, this.z, amount));
+
+        if (this instanceof Player) {
+            triggerCameraShake(amount / 5, 200);
+        }
+    }
+
+    applyStun(duration) {
+        this.isStunned = true;
+        this.stunEndTime = millis() + duration;
+    }
+    
+    findSafeDodgeDirection(initialDirection) {
+        const checkPos = (dir) => {
+            const endX = this.x + dir.x * this.dodgeSpeed * 5;
+            const endZ = this.z + dir.y * this.dodgeSpeed * 5;
+            const currentWallSize = (gameState === 'LOBBY') ? lobbyWallSize : wallSize;
+            const buffer = this.bodyWidth / 2 + 20;
+            
+            if (endX < -currentWallSize / 2 + buffer || endX > currentWallSize / 2 - buffer ||
+                endZ < -currentWallSize / 2 + buffer || endZ > currentWallSize / 2 - buffer) {
+                return false;
+            }
+            return true;
+        };
+
+        if (checkPos(initialDirection)) {
+            return initialDirection;
+        }
+
+        let strafeRight = createVector(initialDirection.y, -initialDirection.x);
+        if (checkPos(strafeRight)) {
+            return strafeRight;
+        }
+
+        let strafeLeft = createVector(-initialDirection.y, initialDirection.x);
+        if (checkPos(strafeLeft)) {
+            return strafeLeft;
+        }
+        
+        return null;
+    }
+
+    performEvasion(direction) {
+        if (this.isDodging || this.isAttacking) return false;
+        if (!(this instanceof Player) && millis() - this.lastDodgeTime < this.dodgeCooldown) return false;
+
+        this.isDodging = true;
+        this.dodgeStartTime = millis();
+        this.lastDodgeTime = millis();
+        this.dodgeDirection = createVector(direction.x, 0, direction.y);
+        return true;
+    }
+
+    applyConstraints() {
+        const currentWallSize = (gameState === 'LOBBY' || gameState === 'SHOP_OPEN' || gameState === 'QUEST_UI') ? lobbyWallSize : wallSize;
+        const buffer = this.bodyWidth / 2;
+        this.x = constrain(this.x, -currentWallSize / 2 + buffer, currentWallSize / 2 - buffer);
+        this.z = constrain(this.z, -currentWallSize / 2 + buffer, currentWallSize / 2 - buffer);
+    }
+
+    update() {
+        if (this.isStunned) {
+            if (millis() > this.stunEndTime) this.isStunned = false;
+            return;
+        }
+
+        if (this.isDodging) {
+            let dodgeProgress = (millis() - this.dodgeStartTime) / this.dodgeDuration;
+            if (dodgeProgress >= 1) {
+                this.isDodging = false;
+            } else {
+                let moveMultiplier = this.dodgeSpeed * sin(dodgeProgress * PI);
+                this.x += this.dodgeDirection.x * moveMultiplier;
+                this.z += this.dodgeDirection.z * moveMultiplier;
+            }
+            this.applyConstraints();
+            return;
+        }
+
+        if (this.isAttacking) {
+            if (millis() - this.attackStartTime > this.attackDuration) {
+                this.isAttacking = false;
+            }
+        }
+    }
+
+    display(weaponType = 'none') {
+        push();
+        if (this.isDodging) { this.displayDodging(); }
+        else { this.displayStandard(weaponType); }
+        pop();
+    }
+
+    displayStandard(weaponType) {
+        let walkAngle = 0, bendAngle = 0, bobbing = 0;
+        if (this.isMoving) {
+            let walkCycle = frameCount * 0.2;
+            walkAngle = sin(walkCycle) * 0.6;
+            bendAngle = map(cos(walkCycle * 2), 1, -1, 0, PI / 2);
+            bobbing = cos(walkCycle * 2) * 4;
+        }
+
+        let rArmAng = walkAngle, lArmAng = -walkAngle, rArmBend = bendAngle, lArmBend = bendAngle, bodyRot = 0;
+        let rightArmAccessory = 'none', leftArmAccessory = 'none';
+
+        if (this.isAttacking) {
+            let attackProgress = (millis() - this.attackStartTime) / this.attackDuration;
+            let swing = sin(attackProgress * PI);
+
+            if(this.attackType === 'spin_slash' || this.attackType === 'whirlwind') { bodyRot = attackProgress * TWO_PI * 2; rArmAng = -PI/2; }
+            else if (this.attackType === 'charge_attack') {
+                let chargeRatio = (player && player.isCharging) ? min(1, (millis() - player.chargeStartTime) / 1500) : 1;
+                rArmAng = -pow(chargeRatio, 2) * 4 - (swing * 0.5); bodyRot = -swing * 0.8;
+            }
+            else if (this.attackType === 'smash') { rArmAng = -swing * PI; lArmAng = -swing * PI; rArmBend = 0; bodyRot = 0; }
+            else if (this.attackType === 'thrust') { rArmAng = -HALF_PI; rArmBend = 0; bodyRot = 0; }
+            else { rArmAng = -swing * 2.5; lArmAng = swing * 0.5; rArmBend = swing * 1.5; bodyRot = -swing * 0.3; }
+
+            if (BOSS_WEAPON_NAMES.includes(weaponType) || weaponType === '검' || weaponType === '대검' || weaponType === '해머') { rightArmAccessory = weaponType; }
+
+        } else {
+             if (weaponType === '검' || weaponType === '요도' || weaponType === 'katana') { leftArmAccessory = 'shield'; }
+        }
+
+        if (weaponType === 'staff' || weaponType === '리치의 지팡이') { rightArmAccessory = 'staff'; }
+        else if (weaponType === 'bow') { leftArmAccessory = 'bow'; }
+
+        this.drawCharacter(walkAngle, bendAngle, bobbing, rArmAng, lArmAng, rArmBend, lArmBend, this.currentAngle, bodyRot, rightArmAccessory, leftArmAccessory);
+    }
+
+    displayDodging() {
+        let dodgeProgress = (millis() - this.dodgeStartTime) / this.dodgeDuration;
+        let rollAngle = dodgeProgress * TWO_PI;
+        let tuck = map(sin(dodgeProgress * PI), 0, 1, 1, 0.6);
+        let bobbing = sin(dodgeProgress * PI) * -40;
+
+        push();
+        translate(this.x, this.groundY + bobbing, this.z);
+        rotateY(atan2(this.dodgeDirection.x, this.dodgeDirection.z) + PI);
+        rotateX(rollAngle);
+        scale(1, tuck, 1);
+        this.drawCharacterModel(0, 0, 0, PI, PI, PI/2, PI/2, 0, 'none', 'none');
+        pop();
+    }
+
+    drawCharacter(walkAngle, bendAngle, bobbing, rArmAng, lArmAng, rArmBend, lArmBend, charAngle, bodyRot, rightArmAccessory, leftArmAccessory) {
+        push();
+        translate(this.x, this.y, this.z);
+        rotateY(charAngle);
+        let weaponName = (this instanceof Player && this.equipment.weapon) ? this.equipment.weapon.name : 'none';
+        this.drawCharacterModel(walkAngle, bendAngle, bobbing, rArmAng, lArmAng, rArmBend, lArmBend, bodyRot, rightArmAccessory, leftArmAccessory, weaponName);
+        pop();
+    }
+    
+    // ★★★ 수정됨: 모든 캐릭터 모델링 품질 향상 ★★★
+    drawCharacterModel(walkAngle, bendAngle, bobbing, rArmAng, lArmAng, rArmBend, lArmBend, bodyRot, rightArmAccessory, leftArmAccessory, weaponName) {
+        push();
+        let bodyCenterY = -this.legLength - (this.bodyHeight / 2) + bobbing;
+        translate(0, bodyCenterY, 0);
+
+        // --- 몸통 ---
+        push();
+        rotateY(bodyRot);
+        let bodyDepth = this.bodyWidth - 10;
+        fill(...this.bodyColor);
+        noStroke();
+
+        if (this instanceof Player) { // 플레이어 모델
+            const shoulderWidth = this.bodyWidth * 1.2;
+            const waistWidth = this.bodyWidth * 0.8;
+            beginShape();
+            // 앞면
+            vertex(-shoulderWidth / 2, -this.bodyHeight / 2, bodyDepth / 2);
+            vertex(shoulderWidth / 2, -this.bodyHeight / 2, bodyDepth / 2);
+            vertex(waistWidth / 2, this.bodyHeight / 2, bodyDepth / 2);
+            vertex(-waistWidth / 2, this.bodyHeight / 2, bodyDepth / 2);
+            endShape(CLOSE);
+            beginShape();
+            // 뒷면
+            vertex(-shoulderWidth / 2, -this.bodyHeight / 2, -bodyDepth / 2);
+            vertex(shoulderWidth / 2, -this.bodyHeight / 2, -bodyDepth / 2);
+            vertex(waistWidth / 2, this.bodyHeight / 2, -bodyDepth / 2);
+            vertex(-waistWidth / 2, this.bodyHeight / 2, -bodyDepth / 2);
+            endShape(CLOSE);
+            // 옆면들
+            fill(this.bodyColor[0]*0.8, this.bodyColor[1]*0.8, this.bodyColor[2]*0.8);
+            beginShape(); vertex(shoulderWidth / 2, -this.bodyHeight / 2, bodyDepth / 2); vertex(shoulderWidth / 2, -this.bodyHeight / 2, -bodyDepth / 2); vertex(waistWidth / 2, this.bodyHeight / 2, -bodyDepth / 2); vertex(waistWidth / 2, this.bodyHeight / 2, bodyDepth / 2); endShape(CLOSE);
+            beginShape(); vertex(-shoulderWidth / 2, -this.bodyHeight / 2, bodyDepth / 2); vertex(-shoulderWidth / 2, -this.bodyHeight / 2, -bodyDepth / 2); vertex(-waistWidth / 2, this.bodyHeight / 2, -bodyDepth / 2); vertex(-waistWidth / 2, this.bodyHeight / 2, bodyDepth / 2); endShape(CLOSE);
+            beginShape(); vertex(shoulderWidth / 2, -this.bodyHeight / 2, bodyDepth / 2); vertex(-shoulderWidth / 2, -this.bodyHeight / 2, bodyDepth / 2); vertex(-shoulderWidth / 2, -this.bodyHeight / 2, -bodyDepth / 2); vertex(shoulderWidth / 2, -this.bodyHeight / 2, -bodyDepth / 2); endShape(CLOSE);
+            beginShape(); vertex(waistWidth / 2, this.bodyHeight / 2, bodyDepth / 2); vertex(-waistWidth / 2, this.bodyHeight / 2, bodyDepth / 2); vertex(-waistWidth / 2, this.bodyHeight / 2, -bodyDepth / 2); vertex(waistWidth / 2, this.bodyHeight / 2, -bodyDepth / 2); endShape(CLOSE);
+
+        } else if (this instanceof SkeletonSoldier || this instanceof SoulKingBoss) {
+            specularMaterial(240); // 뼈 질감
+            for(let i = 0; i < 5; i++) { push(); translate(0, -this.bodyHeight/2.5 + i * (this.bodyHeight/6), 0); box(this.bodyWidth, this.bodyHeight/8, bodyDepth); pop(); }
+        } else {
+            box(this.bodyWidth, this.bodyHeight, bodyDepth);
+        }
+        pop();
+
+        // --- 머리 ---
+        push();
+        rotateY(bodyRot);
+        translate(0, -this.bodyHeight/2 - this.headSize/2, 0);
+        if (this instanceof SkeletonSoldier || this instanceof SkeletonMage || this instanceof SoulKingBoss) {
+            fill(this.bodyColor); specularMaterial(240); sphere(this.headSize/2);
+            push(); translate(0, this.headSize/4, 0); box(this.headSize * 0.6, this.headSize * 0.4, this.headSize * 0.5); pop(); // 턱뼈
+            if (this instanceof SoulKingBoss) {
+                emissiveMaterial(255, 50, 50);
+                push(); translate(this.headSize/4, -this.headSize/8, this.headSize/3); sphere(this.headSize/10); pop();
+                push(); translate(-this.headSize/4, -this.headSize/8, this.headSize/3); sphere(this.headSize/10); pop();
+            } else {
+                fill(0);
+                push(); translate(this.headSize/4, -this.headSize/8, this.headSize/3); sphere(this.headSize/8); translate(-this.headSize/2, 0, 0); sphere(this.headSize/8); pop();
+            }
+        } else { // 플레이어 머리
+            fill(...this.bodyColor);
+            sphere(this.headSize/2);
+            fill(40);
+            push();
+            translate(0, 0, this.headSize/2 - 2);
+            box(this.headSize * 0.7, this.headSize * 0.2, 5); // 바이저
+            pop();
+        }
+        if (this instanceof SkeletonMage) this.drawMageHood();
+        pop();
+
+        // --- 장식물 ---
+        push();
+        rotateY(bodyRot);
+        if (this instanceof Player && !this.isAttacking) this.drawSheathedSword(bodyDepth, weaponName);
+        if (this instanceof SamuraiBoss) this.drawSamuraiArmor();
+        if (this instanceof SoulKingBoss) { this.drawTatteredCloak(); this.drawKingsCrown(); }
+        pop();
+        
+        // --- 팔다리 ---
+        let shoulderY = -this.bodyHeight / 2; let hipY = this.bodyHeight / 2;
+        let isSkeleton = this instanceof SkeletonSoldier || this instanceof SkeletonMage;
+        let drawJoints = this instanceof Player;
+
+        push();
+        rotateY(bodyRot);
+        this.drawLimb(this.bodyWidth/2, shoulderY, rArmAng, rArmBend, 'arm', rightArmAccessory, isSkeleton, drawJoints);
+        this.drawLimb(-this.bodyWidth/2, shoulderY, lArmAng, lArmBend, 'arm', leftArmAccessory, isSkeleton, drawJoints);
+        pop();
+        
+        this.drawLimb(this.bodyWidth/4, hipY, -walkAngle, bendAngle, 'leg', 'none', isSkeleton, drawJoints);
+        this.drawLimb(-this.bodyWidth/4, hipY, walkAngle, bendAngle, 'leg', 'none', isSkeleton, drawJoints);
+
+        pop();
+    }
+
+    drawSheathedSword(bodyDepth, weaponType) { if(weaponType === '검' || weaponType === 'katana' || weaponType === '요도') { push(); translate(10, -this.bodyHeight/4, bodyDepth/2 + 2); rotateZ(-PI / 10); fill(80, 50, 20); box(12, 70, 10); pop(); } }
+    
+    drawLimb(x, y, angle, bend, type, accessory, isSkeleton = false, drawJoints = false) {
+        push();
+        translate(x, y, 0);
+        
+        if(drawJoints){ // 플레이어 관절 및 어깨 갑옷
+            push(); fill(100); sphere(this.limbWidth); pop();
+            if(type === 'arm'){
+                push();
+                translate(0, 5, 0);
+                rotateZ(x > 0 ? -PI/6 : PI/6);
+                fill(120); specularMaterial(150);
+                box(this.bodyWidth, this.bodyWidth * 0.8, this.bodyWidth * 0.9);
+                pop();
+            }
+        }
+
+        rotateX(angle);
+        let upperLen = (type === 'arm') ? this.upperArmLength : this.upperLegLength;
+        let lowerLen = (type === 'arm') ? this.lowerArmLength : this.lowerLegLength;
+
+        push(); translate(0, upperLen / 2, 0); box(this.limbWidth, upperLen, this.limbWidth); pop();
+        translate(0, upperLen, 0);
+        if(drawJoints){ push(); fill(100); sphere(this.limbWidth * 0.8); pop(); }
+
+        if (type === 'arm') rotateX(-bend); else rotateX(bend);
+        push(); translate(0, lowerLen / 2, 0); box(this.limbWidth, lowerLen, this.limbWidth); pop();
+
+        if (accessory !== 'none') {
+            push(); translate(0, lowerLen, 0);
+            if (accessory === '검') this.drawSword(isSkeleton);
+            else if (accessory === '대검' || accessory === '영혼의 대검' || accessory === '화염 군주의 검') this.drawGreatsword();
+            else if (accessory === 'shield') this.drawShield();
+            else if (accessory === 'staff' || accessory === '리치의 지팡이') this.drawStaff();
+            else if (accessory === 'bow') this.drawBow();
+            else if (accessory === 'katana' || accessory === '요도' || accessory === '그림자 비수') this.drawKatana();
+            else if (accessory === '해머' || accessory === '거인의 핵 해머') this.drawHammer();
+            else if (accessory === '서리 거인의 도끼' || accessory === '강철 파쇄기' ) this.drawAxe();
+            else this.drawSword();
+        }
+        pop();
+    }
+
+    drawKingsCrown() { push(); fill(255, 215, 0); specularMaterial(255, 220, 0); translate(0, -this.bodyHeight/2 - this.headSize * 0.9, 0); for (let i = 0; i < 6; i++) { push(); rotateY(i * PI / 3); translate(0, 0, this.headSize/2); cone(5, -15); pop(); } pop(); }
+    drawMageHood() { push(); fill(40, 30, 60); noStroke(); translate(0, -this.headSize/3, 0); beginShape(); vertex(-this.headSize/2, -this.headSize/2, this.headSize/2); vertex(this.headSize/2, -this.headSize/2, this.headSize/2); vertex(this.headSize * 0.8, 0, -this.headSize * 0.8); vertex(-this.headSize * 0.8, 0, -this.headSize * 0.8); endShape(CLOSE); beginShape(); vertex(-this.headSize * 0.8, 0, -this.headSize * 0.8); vertex(-this.headSize * 0.7, this.headSize * 0.6, -this.headSize * 0.4); vertex(this.headSize * 0.7, this.headSize * 0.6, -this.headSize * 0.4); vertex(this.headSize * 0.8, 0, -this.headSize * 0.8); endShape(CLOSE); pop(); }
+    drawTatteredCloak() { push(); fill(20, 20, 25, 200); for(let i = 0; i < 8; i++) { push(); let angle = TWO_PI / 8 * i + (millis() * 0.0001); rotateY(angle); translate(0, this.bodyHeight * 0.2, -this.bodyWidth/2 - 15); beginShape(); vertex(-15, -this.bodyHeight, 0); vertex(15, -this.bodyHeight, 0); vertex(random(5, 10), this.bodyHeight, 0); vertex(random(-10, -5), this.bodyHeight, 0); endShape(CLOSE); pop(); } pop(); }
+    drawSamuraiArmor() { push(); specularMaterial(80, 20, 20); shininess(50); const armorColor = [80, 20, 20]; const trimColor = [200, 180, 50]; fill(armorColor); push(); translate(this.bodyWidth/2 + 25, -this.bodyHeight/2 + 10, 0); rotateZ(-PI/7); box(50, 60, 15); pop(); push(); translate(-this.bodyWidth/2 - 25, -this.bodyHeight/2 + 10, 0); rotateZ(PI/7); box(50, 60, 15); pop(); fill(this.bodyColor); push(); translate(0, -this.bodyHeight/2 - this.headSize, 0); fill(trimColor); push(); translate(0, -10, 0); rotateX(PI/12); box(5, 20, 5); pop(); fill(armorColor); for(let i=0; i<3; i++) { push(); translate(0, 10 + i * 10, -15 - i * 5); rotateX(PI/12); box(this.headSize * 1.2 + i*5, 12, 5); pop(); } pop(); fill(this.bodyColor); push(); translate(0, -this.bodyHeight/2 - this.headSize/1.5, this.headSize/3); box(this.headSize*0.8, this.headSize*0.5, 5); pop(); fill(armorColor); for(let j = 0; j < 3; j++) { for(let i=0; i<2; i++) { push(); translate((j-1) * (this.bodyWidth * 0.5), this.bodyHeight/2 + 25 + i * 20, i * 3); box(this.bodyWidth*0.4, 30, 15); pop(); } } pop(); }
+    
+    drawSword(isRusted = false) { push(); translate(0, 40, 0); fill(isRusted ? [139, 69, 19] : [200]); specularMaterial(isRusted ? 50 : 220); box(8, 80, 2); translate(0, -45, 0); fill(isRusted ? [80, 40, 10] : [120]); box(15, 6, 6); translate(0, -6, 0); fill(isRusted ? [100, 50, 15] : [150]); cylinder(5, 10); pop(); }
+    drawGreatsword() { push(); translate(0, 70, 0); fill(150, 150, 180); specularMaterial(180); shininess(30); box(18, 140, 6); fill(40, 40, 50); translate(0, -80, 0); box(30, 20, 10); push(); emissiveMaterial(80, 60, 120); sphere(5); pop(); translate(0, -15, 0); cylinder(6, 30); pop(); }
+    drawShield() { push(); fill(139, 69, 19); translate(0, 0, 10); box(5, 50, 40); pop(); }
+    drawStaff() { push(); fill(100, 80, 50); translate(0, 40, 0); box(8, 90, 8); translate(0, 45, 0); let glow = 150 + sin(millis() * 0.005) * 50; let size = 12 + sin(millis() * 0.005) * 2; emissiveMaterial(50, glow, 255); sphere(size); pop(); }
+    drawBow() { push(); noFill(); stroke(139, 69, 19); strokeWeight(8); arc(0, 0, 80, 80, HALF_PI, -HALF_PI); pop(); }
+    drawKatana() { push(); fill(220); specularMaterial(230); translate(0, 45, 0); box(6, 90, 2); translate(0, -50, 0); fill(50); cylinder(10, 8); translate(0, -10, 0); fill(40); cylinder(4, 20); pop(); }
+    drawHammer() { push(); translate(0,60,0); fill(100); box(40,40,40); translate(0,-50,0); fill(139,69,19); box(10,80,10); pop(); }
+    drawAxe() { push(); fill(139,69,19); translate(0,20,0); box(10,100,10); translate(0,50,0); fill(192); beginShape(); vertex(-30,-20,0); vertex(30,-20,0); vertex(20,20,0); vertex(-20,20,0); endShape(CLOSE); pop(); }
+    
+    displayHealth() {
+        if (this.hp <= 0 || this.hp >= this.maxHp) return;
+        push();
+        translate(this.x, this.y - this.legLength - this.bodyHeight - 20, this.z);
+        let camAngle = atan2(cameraPosition.x - this.x, cameraPosition.z - this.z);
+        rotateY(camAngle);
+        let barWidth = 80; fill(50); rect(-barWidth/2, 0, barWidth, 8);
+        let hpWidth = map(this.hp, 0, this.maxHp, 0, barWidth);
+        fill(255, 0, 0); rect(-barWidth/2, 0, hpWidth, 8);
+        pop();
+    }
+}
+
+// ----------------------------------
+// 3. 플레이어 클래스 (Player)
+// ----------------------------------
+class Player extends Character {
+  constructor(x, y, z) {
+    super(x, y, z);
+    this.speed = 4; this.bodyColor = [0, 100, 255]; this.baseAttack = 25;
+    this.equipment = { weapon: new Weapon('검'), head: null, chest: null, legs: null };
+    
+    this.equipment.weapon.tier = { name: '커먼', color: [255, 255, 255], multiplier: 1 };
+    this.equipment.weapon.damage = this.equipment.weapon.baseDamage * this.equipment.weapon.tier.multiplier;
+    this.equipment.weapon.price = floor(random(TIER_PRICES['커먼'].min, TIER_PRICES['커먼'].max));
+
+    this.bossWeapons = []; this.activeBossWeaponIndex = -1;
+    this.questProgress = { monsterKills: 0 };
+    this.level = 1; this.exp = 0; this.expToNextLevel = 100; this.coins = 0;
+    this.maxHp = 150; this.hp = this.maxHp;
+    this.maxStamina = 100; this.stamina = this.maxStamina;
+    this.maxMana = 50; this.mana = this.maxMana;
+    this.healthPotions = 30;
+    this.manaPotions = 3;
+    this.isBlocking = false; this.isParrying = false; this.parryWindow = 250; this.rightMousePressTime = 0;
+    this.isCharging = false; this.chargeStartTime = 0;
+    this.lockedOnTarget = null;
+    this.skills = { dash: new DashSlashSkill(), whirlwind: new WhirlwindSkill(), protection: new DivineProtectionSkill() };
+    this.uniqueSkill = null;
+    this.isProtected = false; this.protectionEndTime = 0;
+    this.yodoLastFireTime = 0;
+    this.buffs = {}; 
+  }
+
+  respawn() {
+    this.hp = this.maxHp; this.stamina = this.maxStamina; this.mana = this.maxMana;
+    this.x = 0; this.z = 0;
+    gameState = 'LOBBY'; currentStage = 1; monsterStatMultiplier = 1.0;
+    monsters = []; projectiles = []; hazards = []; boss = null; this.lockedOnTarget = null;
+    this.questProgress = { monsterKills: 0 };
+    if(npc.quest.isActive) { npc.quest.isComplete = false; }
+    this.healthPotions = 30;
+    this.manaPotions = 3;
+    this.buffs = {};
+  }
+
+  getAttackDamage() {
+      let totalDamage = this.baseAttack + (this.equipment.weapon ? this.equipment.weapon.damage : 0);
+      if (this.buffs.overdrive) {
+          totalDamage *= 1.5;
+      }
+      return totalDamage;
+  }
+  
+  getDefense() {
+      let totalDefense = 0;
+      if(this.equipment.head) totalDefense += this.equipment.head.defense;
+      if(this.equipment.chest) totalDefense += this.equipment.chest.defense;
+      if(this.isProtected) totalDefense *= 2;
+      return totalDefense;
+  }
+
+  equip(item, slot) {
+    this.equipment[slot] = item;
+    if (slot === 'weapon') {
+        if (item.skill && typeof window[item.skill] === 'function') { this.uniqueSkill = new window[item.skill](); }
+        else { this.uniqueSkill = null; }
+    }
+  }
+
+  addBossWeapon(weaponData) {
+      if(this.bossWeapons.find(w => w.name === weaponData.name)) return;
+      const weapon = new Weapon(weaponData.name);
+      this.bossWeapons.push(weapon);
+  }
+
+  equipBossWeapon(index) {
+      if (index >= 0 && index < this.bossWeapons.length) {
+          this.activeBossWeaponIndex = index;
+          this.equip(this.bossWeapons[index], 'weapon');
+      }
+  }
+
+  takeDamage(amount, attacker) {
+      if (this.isDodging) return;
+      if(this.isParrying && attacker) {
+          let angleToAttacker = atan2(attacker.x - this.x, attacker.z - this.z);
+          let angleDiff = abs(this.currentAngle - PI - angleToAttacker);
+          if (angleDiff > PI) angleDiff = TWO_PI - angleDiff;
+          if(angleDiff < PI/3) {
+              attacker.applyStun(3000);
+              visualEffects.push(new ParryEffect(this.x, this.y, this.z));
+              return;
+          }
+      }
+      if (this.isBlocking) {
+          const blockPower = 0.8;
+          if (this.stamina >= amount * 0.2) { this.stamina -= amount * 0.2; amount *= (1 - blockPower); visualEffects.push(new ShieldEffect(this.x, this.y - this.legLength, this.z, this.currentAngle)); }
+      }
+      const finalDamage = max(0.5, amount - this.getDefense());
+      super.takeDamage(finalDamage, attacker);
+  }
+
+  useSkill(skillName) { if (this.skills[skillName]) { this.skills[skillName].activate(this); } }
+  useUniqueSkill() { if (this.uniqueSkill) this.uniqueSkill.activate(this); }
+
+  performEvasion() {
+      if (this.stamina < 25 || this.isDodging || this.isAttacking || this.isBlocking) return;
+      this.stamina -= 25;
+
+      let yInput = 0; let xInput = 0;
+      if (keyIsDown(87)) yInput = -1;
+      if (keyIsDown(83)) yInput = 1;
+      if (keyIsDown(65)) xInput = -1;
+      if (keyIsDown(68)) xInput = 1;
+
+      let evasionDir;
+      if (xInput === 0 && yInput === 0) {
+          evasionDir = createVector(-sin(this.currentAngle - PI), -cos(this.currentAngle - PI));
+      } else {
+          let forward = createVector(sin(camAngleX), cos(camAngleX));
+          let right = createVector(cos(camAngleX), -sin(camAngleX));
+          let forwardMove = p5.Vector.mult(forward, yInput);
+          let rightMove = p5.Vector.mult(right, xInput);
+          evasionDir = p5.Vector.add(forwardMove, rightMove);
+      }
+      super.performEvasion(evasionDir.normalize());
+  }
+
+  performAttack(type, duration, damage, size = 120) {
+    if (this.isAttacking || this.isDodging || this.isBlocking) return;
+    this.isAttacking = true; this.attackType = type; this.attackStartTime = millis(); this.attackDuration = duration;
+    setTimeout(() => {
+        if(!this.isAttacking || this.attackType !== type) return;
+        let attackOffset = p5.Vector.fromAngle(this.currentAngle - PI).mult(60);
+        let attackPos = createVector(this.x + attackOffset.x, this.y, this.z + attackOffset.y);
+        let attackHitbox = new Attack(attackPos.x, attackPos.y, attackPos.z, damage);
+        attackHitbox.size = size;
+        let targets = boss ? [boss, ...monsters] : monsters;
+        for(let target of targets) {
+           if(attackHitbox.hits(target)) {
+               if (target instanceof SamuraiBoss && target.aiState === 'COUNTERING') target.triggerCounterAttack();
+               else target.takeDamage(damage, this);
+           }
+        }
+    }, duration / 2.5);
+  }
+  
+  performSpinSlash() { if (this.stamina < 30) return; this.stamina -= 30; this.performAttack('spin_slash', 800, this.getAttackDamage() * 1.2, 150); }
+  performWhirlwind() { this.useSkill('whirlwind'); }
+  
+  applyProtectionBuff() { 
+      this.isProtected = true; 
+      this.protectionEndTime = millis() + 7000; 
+      this.applyBuff('protection', 7000, '신성의 가호');
+      visualEffects.push(new ProtectionAura(this)); 
+  }
+  
+  applyBuff(name, duration, displayName) {
+      this.buffs[name] = {
+          endTime: millis() + duration,
+          displayName: displayName
+      };
+  }
+  
+  performDashSlash() { if (this.stamina < 40) return; this.stamina -= 40; if (this.isAttacking || this.isDodging || this.isBlocking) return; this.isAttacking = true; this.attackType = 'dash_slash'; this.attackStartTime = millis(); this.attackDuration = 400; let dashVec = p5.Vector.fromAngle(this.currentAngle - PI).mult(150); this.x += dashVec.x; this.z += dashVec.y; visualEffects.push(new DashEffect(this.x, this.z, this.currentAngle)); this.performAttack('dash_slash', 400, this.getAttackDamage() * 1.5, 150); }
+  startChargeAttack() { if (this.isAttacking || this.isDodging || this.isBlocking) return; this.isCharging = true; this.chargeStartTime = millis(); }
+  releaseChargeAttack() { 
+      if (!this.isCharging) return; 
+      this.isCharging = false; 
+      let chargeDuration = millis() - this.chargeStartTime; 
+      let chargeRatio = min(chargeDuration / 1500, 1); 
+      if (this.stamina < 20 * chargeRatio) return; 
+      this.stamina -= 20 * chargeRatio; 
+      let damage = this.getAttackDamage() * (1 + chargeRatio * 1.5); 
+      this.performAttack('charge_attack', 800, damage, 180); 
+  }
+  startParry() { if (this.isAttacking || this.isDodging || this.stamina < 15) return; this.stamina -= 15; this.rightMousePressTime = millis(); this.isParrying = true; setTimeout(() => this.isParrying = false, this.parryWindow); }
+  stopParryOrBlock() { this.isBlocking = false; }
+  toggleLockOn() { if (this.lockedOnTarget && this.lockedOnTarget.hp <=0) this.lockedOnTarget = null; if (this.lockedOnTarget) { this.lockedOnTarget = null; return; } let allMonsters = boss ? [boss, ...monsters] : monsters; let closestDist = Infinity; let target = null; for (let m of allMonsters) { if (m.hp > 0) { let d = dist(this.x, this.z, m.x, m.z); if (d < 800 && d < closestDist) { closestDist = d; target = m; } } } this.lockedOnTarget = target; }
+  useHealthPotion() { if (this.healthPotions > 0 && this.hp < this.maxHp) { this.healthPotions--; this.hp = min(this.maxHp, this.hp + 50); } }
+  useManaPotion() { if (this.manaPotions > 0 && this.mana < this.maxMana) { this.manaPotions--; this.mana = min(this.maxMana, this.mana + 30); } }
+  gainExp(amount) { this.exp += amount; if (this.exp >= this.expToNextLevel) this.levelUp(); }
+  levelUp() { this.level++; this.exp -= this.expToNextLevel; this.expToNextLevel = floor(this.expToNextLevel * 1.5); this.maxHp += 20; this.maxStamina += 10; this.maxMana += 10; this.hp = this.maxHp; this.stamina = this.maxStamina; this.mana = this.maxMana; }
+
+  update() {
+    super.update();
+    if(this.isDodging || this.isStunned) return;
+    
+    if (this.isProtected && millis() > this.protectionEndTime) this.isProtected = false;
+
+    for (const buffName in this.buffs) {
+        if (millis() > this.buffs[buffName].endTime) {
+            if (buffName === 'protection') this.isProtected = false;
+            delete this.buffs[buffName];
+        }
+    }
+    
+    if (this.equipment.weapon && this.equipment.weapon.name === '요도' && millis() - this.yodoLastFireTime > 5000) {
+        if (gameState === 'PLAYING' || gameState === 'BOSS_FIGHT') {
+            let closestMonster = null; let closestDist = Infinity; let allTargets = boss ? [boss, ...monsters] : monsters.filter(m => m.hp > 0);
+            if(allTargets.length > 0) {
+                 for (let m of allTargets) { let d = dist(this.x, this.z, m.x, m.z); if (d < closestDist) { closestDist = d; closestMonster = m; } }
+                projectiles.push(new SwordWind(this.x, this.y - 80, this.z, this.currentAngle, this.getAttackDamage() * 0.5, this, closestMonster));
+                this.yodoLastFireTime = millis();
+            }
+        }
+    }
+
+    if (mouseIsPressed && mouseButton === RIGHT && !this.isParrying && millis() - this.rightMousePressTime > this.parryWindow) this.isBlocking = true;
+    else this.isBlocking = false;
+
+    if (!this.isAttacking && !this.isBlocking && !this.isCharging) this.stamina = min(this.maxStamina, this.stamina + 0.6);
+    this.mana = min(this.maxMana, this.mana + 0.1);
+
+    let moveDir = createVector(0, 0);
+    this.isMoving = false;
+    if (!this.isAttacking && !this.isBlocking && !this.isCharging) {
+        let yInput = 0; let xInput = 0;
+        if (keyIsDown(87)) yInput = -1; 
+        if (keyIsDown(83)) yInput = 1;  
+        if (keyIsDown(65)) xInput = -1; 
+        if (keyIsDown(68)) xInput = 1;  
+        
+        if (xInput !== 0 || yInput !== 0) {
+            this.isMoving = true;
+            let forward = createVector(sin(camAngleX), cos(camAngleX));
+            let right = createVector(cos(camAngleX), -sin(camAngleX));
+            let forwardMove = p5.Vector.mult(forward, yInput);
+            let rightMove = p5.Vector.mult(right, xInput);
+            moveDir = p5.Vector.add(forwardMove, rightMove);
+        }
+    }
+
+    if (this.isMoving) {
+        let currentSpeed = (this.isBlocking || this.isCharging) ? this.speed * 0.5 : this.speed;
+        moveDir.normalize().mult(currentSpeed);
+        this.x += moveDir.x; this.z += moveDir.y;
+        if (!this.lockedOnTarget) {
+            this.targetAngle = atan2(moveDir.x, moveDir.y) + PI;
+        }
+    }
+    
+    if (this.lockedOnTarget) {
+        this.targetAngle = atan2(this.lockedOnTarget.x - this.x, this.lockedOnTarget.z - this.z) + PI;
+    }
+    
+    if (!this.lockedOnTarget) {
+        this.currentAngle = this.targetAngle;
+    } else {
+        let angleDiff = this.targetAngle - this.currentAngle;
+        while (angleDiff < -PI) angleDiff += TWO_PI;
+        while (angleDiff > PI) angleDiff -= TWO_PI;
+        this.currentAngle += angleDiff * 0.25;
+    }
+    
+    this.applyConstraints();
+  }
+  
+  display() {
+      super.display(this.equipment.weapon ? this.equipment.weapon.name : '검');
+      if(this.isCharging) { let chargeRatio = min(1, (millis() - this.chargeStartTime) / 1500); let chargeEffect = 1 + sin(millis() * 0.01) * 0.5 * chargeRatio; push(); translate(this.x, this.y-80, this.z); fill(255, 60, 60, 150 * chargeEffect); noStroke(); sphere(this.bodyHeight/2 * chargeEffect * chargeRatio); pop(); }
+      if(this.lockedOnTarget) { push(); translate(this.lockedOnTarget.x, this.lockedOnTarget.y - this.lockedOnTarget.legLength - this.lockedOnTarget.bodyHeight - 20, this.lockedOnTarget.z); stroke(255,0,0, 200); noFill(); rotateY(millis() * 0.002); box(this.lockedOnTarget.bodyWidth + 20); pop(); }
+      
+      if (this.buffs.overdrive) {
+          push();
+          translate(this.x, this.y - 80, this.z);
+          noStroke();
+          fill(255, 100, 0, 50 + sin(millis() * 0.02) * 40);
+          sphere(this.bodyHeight * 0.8);
+          pop();
+      }
+  }
+}
+
+// ----------------------------------
+// 4. 나머지 모든 클래스
+// ----------------------------------
+class SkeletonSoldier extends Character { constructor(x, y, z) { super(x, y, z); this.speed = 1.4; this.maxHp = 120 * monsterStatMultiplier; this.hp = this.maxHp; this.damage = 2.25 * monsterStatMultiplier; this.attackRange = 100; this.chaseRange = 500; this.attackCooldown = 2500; this.lastAttackTime = 0; this.bodyColor = [220, 220, 210]; this.bodyWidth = 30; this.limbWidth = 8; this.expValue = 20; this.dodgeSpeed = 5; } update() { super.update(); if (this.isDodging || this.isAttacking || this.isStunned) return; if (player.isAttacking && dist(this.x, this.z, player.x, player.z) < 200) { if (random() < 0.7) { let dodgeDir = createVector(this.x - player.x, this.z - player.z).normalize(); let safeDir = this.findSafeDodgeDirection(dodgeDir); if (safeDir) { this.performEvasion(safeDir); } return; } } let d = dist(this.x, this.z, player.x, player.z); let moveVec = createVector(player.x - this.x, player.z - this.z); this.targetAngle = atan2(moveVec.x, moveVec.z) + PI; if (d < this.attackRange) { this.isMoving = false; if (millis() - this.lastAttackTime > this.attackCooldown) { this.isAttacking = true; this.attackType = 'vertical_slash'; this.attackStartTime = millis(); this.attackDuration = 800; this.lastAttackTime = millis(); setTimeout(() => { if (dist(this.x, this.z, player.x, player.z) < this.attackRange + 20) { player.takeDamage(this.damage, this); } }, 400); } } else if (d < this.chaseRange) { moveVec.normalize().mult(this.speed); this.x += moveVec.x; this.z += moveVec.y; this.isMoving = true; } else { this.isMoving = false; } let angleDiff = this.targetAngle - this.currentAngle; while (angleDiff < -PI) angleDiff += TWO_PI; while (angleDiff > PI) angleDiff -= TWO_PI; this.currentAngle += angleDiff * 0.1; this.applyConstraints(); } display() { super.display('검'); this.displayHealth(); } }
+class SkeletonMage extends Character { constructor(x, y, z) { super(x, y, z); this.speed = 1.2; this.maxHp = 80 * monsterStatMultiplier; this.hp = this.maxHp; this.damage = 1.8 * monsterStatMultiplier; this.attackRange = 450; this.optimalDistance = 350; this.chaseRange = 600; this.attackCooldown = 3000; this.lastAttackTime = 0; this.bodyColor = [220, 220, 210]; this.bodyWidth = 30; this.limbWidth = 8; this.expValue = 30; this.dodgeSpeed = 5; } update() { super.update(); if (this.isDodging || this.isAttacking || this.isStunned) return; if (player.isAttacking && dist(this.x, this.z, player.x, player.z) < 250) { if (random() < 0.9) { let dodgeDir = createVector(this.x - player.x, this.z - player.z).normalize(); let safeDir = this.findSafeDodgeDirection(dodgeDir); if (safeDir) { this.performEvasion(safeDir); } return; } } let d = dist(this.x, this.z, player.x, player.z); let moveVec = createVector(player.x - this.x, player.z - this.z); this.targetAngle = atan2(moveVec.x, moveVec.z) + PI; if (d < this.optimalDistance * 0.8) { moveVec.normalize().mult(-this.speed); this.x += moveVec.x; this.z += moveVec.y; this.isMoving = true; } else if (d < this.attackRange) { this.isMoving = false; if (millis() - this.lastAttackTime > this.attackCooldown) { this.isAttacking = true; this.attackType = 'cast_spell'; this.attackStartTime = millis(); this.attackDuration = 1000; this.lastAttackTime = millis(); setTimeout(() => { projectiles.push(new MagicBolt(this.x, this.y-80, this.z, this.currentAngle, this.damage, this, player)); }, 500); } } else if (d < this.chaseRange) { moveVec.normalize().mult(this.speed); this.x += moveVec.x; this.z += moveVec.y; this.isMoving = true; } else { this.isMoving = false; } let angleDiff = this.targetAngle - this.currentAngle; while (angleDiff < -PI) angleDiff += TWO_PI; while (angleDiff > PI) angleDiff -= TWO_PI; this.currentAngle += angleDiff * 0.1; this.applyConstraints(); } display() { super.display('staff'); this.displayHealth(); } }
+class RestlessSoul extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [100,100,255,150];}}
+class SoulWhisper extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [100,100,255,150];}}
+class RockGolem extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [139,137,137]; this.speed *= 0.8; this.maxHp *= 1.5;}}
+class RuneCaster extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [139,137,137];}}
+class VenomousSerpent extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [0,100,0];}}
+class SpittingCobra extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [0,100,0];}}
+class RisenDead extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [120,80,60];}}
+class AcolyteOfMalakor extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [40,20,50];}}
+class ScrapDrone extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [105,105,105];}}
+class LaserTurret extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [105,105,105];}}
+class IceElemental extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [173,216,230];}}
+class FrostSprite extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [173,216,230];}}
+class FireImp extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [255,69,0];}}
+class MagmaSlinger extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [255,69,0];}}
+class ShadeStalker extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [40,40,40,200];}}
+class PhantomArcher extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [40,40,40,200];}}
+class Voidling extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [75,0,130];}}
+class OcularSentry extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [75,0,130];}}
+class YoungWyvern extends SkeletonSoldier { constructor(x,y,z) {super(x,y,z); this.bodyColor = [34,139,34];}}
+class YoungStormDragon extends SkeletonMage { constructor(x,y,z) {super(x,y,z); this.bodyColor = [255,255,0];}}
+class SamuraiBoss extends Character { constructor(x, y, z) { super(x, y, z); this.bodyColor = [50, 50, 60]; this.bodyHeight *= 1.5; this.bodyWidth *= 1.5; this.headSize *= 1.5; this.limbWidth *= 1.5; this.upperArmLength *= 1.5; this.lowerArmLength *= 1.5; this.upperLegLength *= 1.5; this.lowerLegLength *= 1.5; this.legLength = this.upperLegLength + this.lowerLegLength; this.speed = 2.2 * monsterStatMultiplier; this.maxHp = 2000 * monsterStatMultiplier * 0.6; /* ★★★ 수정됨: 보스 난이도 하향 ★★★ */ this.hp = this.maxHp; this.damage = 18 * monsterStatMultiplier * 0.6; /* ★★★ 수정됨: 보스 난이도 하향 ★★★ */ this.expValue = 1500; this.coinValue = 500; this.aiState = 'IDLE'; this.lastActionTime = 0; this.actionCooldown = 1500; this.skillCooldowns = { tornado: millis(), counter: millis(), ultimate: millis() }; this.ultimateUsed = false; this.dodgeSpeed = 4; } update() { super.update(); if (this.isDodging || this.isStunned) return; if (!this.isAttacking && this.aiState !== 'COUNTERING') { this.updateAI(); } this.targetAngle = atan2(player.x - this.x, player.z - this.z) + PI; let angleDiff = this.targetAngle - this.currentAngle; while (angleDiff < -PI) angleDiff += TWO_PI; while (angleDiff > PI) angleDiff -= TWO_PI; this.currentAngle += angleDiff * 0.1; this.applyConstraints(); } updateAI() { let d = dist(this.x, this.z, player.x, player.z); if (millis() - this.lastActionTime < this.actionCooldown) return; if (player.isAttacking && d < 250) { if (random() < 0.6) { let dodgeDir = createVector(this.x - player.x, this.z - player.z).normalize(); let safeDir = this.findSafeDodgeDirection(dodgeDir); if (safeDir) { this.performEvasion(safeDir); } this.lastActionTime = millis(); return; } } if (!this.ultimateUsed && this.hp < this.maxHp / 2 && millis() > this.skillCooldowns.ultimate) { this.useUltimate(); return; } if (player.isAttacking && d < 150 && millis() > this.skillCooldowns.counter) { this.enterCounterStance(); return; } if (d > 250 && d < 600 && millis() > this.skillCooldowns.tornado) { this.useTornado(); return; } if (d < 150) { this.useMeleeAttack(); } else { this.aiState = 'CHASING'; let moveVec = createVector(player.x - this.x, player.z - this.z).normalize().mult(this.speed); this.x += moveVec.x; this.z += moveVec.y; this.isMoving = true; } } useMeleeAttack() { this.isMoving = false; this.aiState = 'ATTACKING'; this.isAttacking = true; this.attackType = 'horizontal_slash'; this.attackDuration = 700; this.attackStartTime = millis(); this.lastActionTime = millis(); setTimeout(() => { if (dist(this.x, this.z, player.x, player.z) < 200) player.takeDamage(this.damage, this); }, this.attackDuration * 0.5); } useTornado() { this.aiState = 'ATTACKING'; this.attackType = 'spin_slash'; this.isAttacking = true; this.attackDuration = 1000; this.attackStartTime = millis(); this.lastActionTime = millis(); this.skillCooldowns.tornado = millis() + 12000; setTimeout(() => { projectiles.push(new TornadoEffect(this.x, this.y, this.z, this.currentAngle, this.damage * 0.8, this, player)); }, 350); } enterCounterStance() { this.aiState = 'COUNTERING'; this.isMoving = false; this.lastActionTime = millis(); this.skillCooldowns.counter = millis() + 10000; setTimeout(() => { if (this.aiState === 'COUNTERING') this.aiState = 'IDLE'; }, 1500); } triggerCounterAttack() { this.aiState = 'ATTACKING'; this.attackType = 'horizontal_slash'; this.attackDuration = 300; this.isAttacking = true; this.attackStartTime = millis(); this.lastActionTime = millis(); setTimeout(() => { if (dist(this.x, this.z, player.x, player.z) < 200) player.takeDamage(this.damage * 2, this); }, 150); } useUltimate() { this.aiState = 'ULTIMATE'; this.ultimateUsed = true; this.skillCooldowns.ultimate = millis() + 99999; for (let i = 0; i < 5; i++) { setTimeout(() => { let targetPos = createVector(player.x, player.z); let dashVec = p5.Vector.sub(targetPos, createVector(this.x, this.z)).normalize().mult(100); this.x = targetPos.x - dashVec.x; this.z = targetPos.y - dashVec.y; this.isAttacking = true; this.attackType = 'ultimate_slash'; this.attackStartTime = millis(); this.attackDuration = 200; visualEffects.push(new DashEffect(this.x, this.z, this.currentAngle)); if (dist(this.x, this.z, player.x, player.z) < 200) player.takeDamage(this.damage * 1.2, this); }, i * 300); } this.lastActionTime = millis() + 1500; this.aiState = 'IDLE'; } display() { super.display('katana'); } }
+class SoulKingBoss extends Character { constructor(x, y, z) { super(x,y,z); this.bodyColor = [200, 200, 220]; this.bodyHeight *= 1.8; this.bodyWidth *= 1.8; this.headSize *= 1.8; this.limbWidth *= 1.8; this.upperArmLength *= 1.8; this.lowerArmLength *= 1.8; this.upperLegLength *= 1.8; this.lowerLegLength *= 1.8; this.legLength = this.upperLegLength + this.lowerLegLength; this.speed = 2.0 * monsterStatMultiplier; this.maxHp = 4000 * monsterStatMultiplier * 0.6; /* ★★★ 수정됨: 보스 난이도 하향 ★★★ */ this.hp = this.maxHp; this.damage = 30 * monsterStatMultiplier * 0.6; /* ★★★ 수정됨: 보스 난이도 하향 ★★★ */ this.expValue = 3000; this.coinValue = 1000; this.aiState = 'IDLE'; this.lastActionTime = 0; this.actionCooldown = 2000; this.skillCooldowns = { soulfire: millis(), ultimate: millis() }; this.ultimateUsed = false; this.dodgeSpeed = 4; } update() { super.update(); if (this.isDodging || this.isStunned) return; if (!this.isAttacking) { this.updateAI(); } this.targetAngle = atan2(player.x - this.x, player.z - this.z) + PI; let angleDiff = this.targetAngle - this.currentAngle; while (angleDiff < -PI) angleDiff += TWO_PI; while (angleDiff > PI) angleDiff -= TWO_PI; this.currentAngle += angleDiff * 0.08; this.applyConstraints(); } updateAI() { let d = dist(this.x, this.z, player.x, player.z); if (millis() - this.lastActionTime < this.actionCooldown) return; if (player.isAttacking && d < 300) { if (random() < 0.5) { let dodgeDir = createVector(this.x - player.x, this.z - player.z).normalize(); let safeDir = this.findSafeDodgeDirection(dodgeDir); if (safeDir) { this.performEvasion(safeDir); } this.lastActionTime = millis(); return; } } if (!this.ultimateUsed && this.hp < this.maxHp / 2) { this.useUltimate(); return; } if (d > 300 && millis() > this.skillCooldowns.soulfire) { this.throwSoulfire(); } else if (d < 250) { this.useMeleeAttack(); } else { this.aiState = 'CHASING'; let moveVec = createVector(player.x - this.x, player.z - this.z).normalize().mult(this.speed); this.x += moveVec.x; this.z += moveVec.y; this.isMoving = true; } } throwSoulfire() { this.aiState = 'CASTING'; this.isAttacking = true; this.attackType = 'cast'; this.attackDuration = 1000; this.attackStartTime = millis(); this.lastActionTime = millis(); this.skillCooldowns.soulfire = millis() + 5000; setTimeout(() => { projectiles.push(new SoulFire(this.x, this.y - 120, this.z, this.currentAngle, this.damage * 0.8, this, player)); }, 500); } useMeleeAttack() { this.isMoving = false; this.aiState = 'ATTACKING'; this.isAttacking = true; this.lastActionTime = millis(); let attackRoll = random(1); let currentDamage = this.damage; if (attackRoll < 0.4) { this.attackType = 'smash'; this.attackDuration = 1500; currentDamage *= 1.5; } else if (attackRoll < 0.7) { this.attackType = 'thrust'; this.attackDuration = 1000; } else { this.attackType = 'horizontal_slash'; this.attackDuration = 1200; } this.attackStartTime = millis(); setTimeout(() => { if (dist(this.x, this.z, player.x, player.z) < 250) { player.takeDamage(currentDamage, this); } }, this.attackDuration * 0.6); } useUltimate() { this.aiState = 'ULTIMATE'; this.ultimateUsed = true; this.lastActionTime = millis() + 5000; for (let i = 0; i < 15; i++) { let thornX = random(-wallSize / 2 + 50, wallSize / 2 - 50); let thornZ = random(-wallSize / 2 + 50, wallSize / 2 - 50); hazards.push(new HellThorn(thornX, thornZ)); } } display() { super.display('대검'); } }
+class GolemSentry extends SoulKingBoss {}
+class AbyssStalker extends SamuraiBoss {}
+class ArchlichMalakor extends SoulKingBoss {}
+class IronAnnihilator extends SoulKingBoss {}
+class FrostTitan extends SoulKingBoss {}
+class FlameLord extends SoulKingBoss {}
+class ShadowBlade extends SamuraiBoss {}
+class VoidGazer extends SoulKingBoss {}
+class SkyfireDragon extends SoulKingBoss {}
+
+class DashSlashSkill extends Skill { constructor() { super("돌진 베기", 25, 6000); } activate(player) { if (!super.activate(player)) return; player.performDashSlash(); } }
+class WhirlwindSkill extends Skill { constructor() { super("선풍격", 40, 8000); } activate(player) { if (!super.activate(player)) return; player.performAttack('whirlwind', 1000, player.getAttackDamage() * 2.5, 200); visualEffects.push(new WhirlwindEffect(player.x, player.y-80, player.z)); } }
+class DivineProtectionSkill extends Skill { constructor() { super("신성의 가호", 30, 15000); } activate(player) { if (!super.activate(player)) return; player.applyProtectionBuff(); } }
+class SoulRiftSkill extends Skill { constructor() { super("영혼 균열", 35, 7000); } activate(player) { if (!super.activate(player)) return; projectiles.push(new SwordWind(player.x, player.y - 80, player.z, player.currentAngle, player.getAttackDamage() * 1.5, player, player.lockedOnTarget)); } }
+class GroundSlamSkill extends Skill { constructor() { super("지면 강타", 50, 10000); } activate(player) { if (!super.activate(player)) return; hazards.push(new Shockwave(player.x, player.z, player.getAttackDamage() * 2)); triggerCameraShake(10, 500); } }
+class PoisonNovaSkill extends Skill { constructor() { super("독성 폭발", 30, 8000); } activate(player) { if (!super.activate(player)) return; hazards.push(new PoisonCloud(player.x, player.z, 150, 5000, player.getAttackDamage() * 0.5)); } }
+class SummonUndeadSkill extends Skill { constructor() { super("망자 소환", 60, 20000); } activate(player) { if (!super.activate(player)) return; for (let i = 0; i < 3; i++) { let angle = random(TWO_PI); let x = player.x + cos(angle) * 100; let z = player.z + sin(angle) * 100; monsters.push(new RisenDead(x, 50, z)); } } }
+class OverdriveSkill extends Skill { constructor() { super("과부하", 40, 15000); } activate(player) { if (!super.activate(player)) return; player.applyBuff('overdrive', 5000, '과부하'); } }
+class FrostBreathSkill extends Skill { constructor() { super("냉기 숨결", 45, 12000); } activate(player) { if (!super.activate(player)) return; projectiles.push(new FrostBreath(player.x, player.y - 80, player.z, player.currentAngle, player.getAttackDamage(), player)); } }
+class MeteorSwarmSkill extends Skill { constructor() { super("유성우", 70, 25000); } activate(player) { if (!super.activate(player)) return; for (let i = 0; i < 5; i++) { setTimeout(() => { let target = player.lockedOnTarget || random(monsters.filter(m=>m.hp>0)) || boss; if (target) { hazards.push(new Meteor(target.x + random(-50, 50), 300, target.z + random(-50, 50), player.getAttackDamage() * 3)); } }, i * 300); } } }
+class ShadowCloneSkill extends Skill { constructor() { super("그림자 분신", 50, 18000); } activate(player) { if (!super.activate(player)) return; visualEffects.push(new ShadowClone(player)); } }
+class VoidBeamSkill extends Skill { constructor() { super("공허 광선", 65, 16000); } activate(player) { if (!super.activate(player)) return; visualEffects.push(new VoidBeam(player, player.lockedOnTarget)); } }
+class LightningStrikeSkill extends Skill { constructor() { super("번개 강타", 55, 14000); } activate(player) { if (!super.activate(player)) return; let target = player.lockedOnTarget || random(monsters.filter(m=>m.hp>0)) || boss; if (target) { hazards.push(new LightningField(target.x, target.z, 3000, player.getAttackDamage() * 2.5)); } } }
+
+class MagicBolt { constructor(x, y, z, angle, damage, owner, target) { this.pos = createVector(x, y, z); this.vel = p5.Vector.fromAngle(angle - PI).mult(8); this.speed = 8; this.damage = damage; this.startTime = millis(); this.owner = owner; this.target = target; } update() { if (this.target && this.target.hp > 0) { let targetDir = p5.Vector.sub(createVector(this.target.x, this.target.y - 80, this.target.z), this.pos); targetDir.normalize().mult(this.speed); this.vel.lerp(targetDir, 0.05); } this.pos.add(this.vel); } isOffScreen() { return millis() - this.startTime > 9000; } checkHit(targets) { for (let target of targets) { if (target && target !== this.owner) { if (target.isDodging) continue; let d = dist(this.pos.x, this.pos.y, this.pos.z, target.x, target.y - 80, target.z); if (d < 20 + target.bodyWidth) return target; } } return null; } display() { push(); translate(this.pos.x, this.pos.y, this.pos.z); noStroke(); emissiveMaterial(150, 50, 255); sphere(15); pop(); } }
+class SwordWind { constructor(x, y, z, angle, damage, owner, target) { this.pos = createVector(x, y, z); this.vel = createVector(sin(angle - PI), cos(angle - PI)).mult(12); this.speed = 12; this.angle = angle; this.damage = damage; this.startTime = millis(); this.owner = owner; this.target = target; } update() { if (this.target && this.target.hp > 0) { let targetDir = p5.Vector.sub(createVector(this.target.x, this.target.y - 80, this.target.z), this.pos); targetDir.normalize().mult(this.speed); this.vel.lerp(targetDir, 0.08); this.angle = atan2(this.vel.x, this.vel.z) + PI; } this.pos.add(this.vel.x, 0, this.vel.y); } isOffScreen() { return millis() - this.startTime > 3000; } checkHit(targets) { for (let target of targets) { if (target && target !== this.owner && target.hp > 0) { if (target.isDodging) continue; let d = dist(this.pos.x, this.pos.z, target.x, target.z); if (d < 30 + target.bodyWidth/2) return target; } } return null; } display() { push(); translate(this.pos.x, this.pos.y, this.pos.z); rotateY(this.angle); noStroke(); fill(173, 216, 230, 150); cylinder(60, 10); pop(); } }
+class FrostBreath extends SwordWind {}
+class SoulFire extends MagicBolt { display() { push(); translate(this.pos.x, this.pos.y, this.pos.z); noStroke(); pointLight(255, 255, 255, this.pos.x, this.pos.y, this.pos.z); let swirl = millis() * 0.01; fill(255, 255, 255, 150); push(); rotateY(swirl); sphere(18); pop(); fill(0, 0, 0, 150); push(); rotateX(swirl); sphere(15); pop(); pop(); } }
+class Hazard { constructor(x, z, duration, damage) { this.x = x; this.z = z; this.startTime = millis(); this.duration = duration; this.damage = damage;} isFinished() { return millis() - this.startTime > this.duration; } update() {} display() {} checkCollision(target) { if(target.isDodging) return; } }
+class Shockwave extends Hazard { constructor(x, z, damage) { super(x,z,1000,damage); this.radius = 0; this.maxRadius = 300; } update() { this.radius = lerp(this.radius, this.maxRadius, 0.1); } display() { push(); translate(this.x, 51, this.z); rotateX(HALF_PI); noFill(); stroke(255,150,0,150); strokeWeight(10); ellipse(0,0, this.radius*2); pop(); } checkCollision(target) { if(!target.isDodging && dist(this.x, this.z, target.x, target.z) < this.radius) { target.takeDamage(this.damage * (deltaTime/1000), this); } } }
+class PoisonCloud extends Hazard { constructor(x,z,radius,duration,damage) { super(x,z,duration,damage); this.radius = radius; } display() { push(); translate(this.x, 50, this.z); fill(0,255,0,50); sphere(this.radius); pop(); } checkCollision(target) { if(!target.isDodging && dist(this.x, this.z, target.x, target.z) < this.radius) { target.takeDamage(this.damage * (deltaTime/1000), this); } } }
+class Meteor extends Hazard { constructor(x,y,z,damage) { super(x,z,3000,damage); this.y = y; this.targetY = 50; this.landed = false; } update() { if(!this.landed) { this.y = lerp(this.y, this.targetY, 0.1); if(abs(this.y - this.targetY) < 1) { this.landed = true; triggerCameraShake(8, 300); } } } display() { push(); translate(this.x, this.y, this.z); fill(255,50,0); sphere(40); pop(); } }
+class LightningField extends Hazard { constructor(x,z,duration,damage) { super(x,z,duration,damage); } display() { push(); translate(this.x, 50, this.z); fill(255,255,0,100); box(100, 200, 100); pop(); } checkCollision(target) { if(!target.isDodging && abs(target.x - this.x) < 50 && abs(target.z - this.z) < 50) { target.takeDamage(this.damage * (deltaTime/1000), this); } } }
+class HellThorn { constructor(x, z) { this.pos = createVector(x, 100, z); this.targetY = 25; this.dps = 10; this.size = 30; } update() { this.pos.y = lerp(this.pos.y, this.targetY, 0.1); } checkCollision(p) { if (!p.isDodging && dist(this.pos.x, this.pos.z, p.x, p.z) < this.size) p.takeDamage(this.dps/60, this); } display() { push(); translate(this.pos.x, this.pos.y, this.pos.z); fill(50, 40, 40); specularMaterial(80); cone(this.size, -150); pop(); } }
+class VisualEffect { constructor(duration) { this.startTime = millis(); this.duration = duration; } isFinished() { return millis() - this.startTime > this.duration; } update() {} display() {} }
+class ShadowClone extends VisualEffect { constructor(player) { super(5000); this.player = player; } display() { /* ... */ }}
+class VoidBeam extends VisualEffect { constructor(player, target) { super(2000); this.player=player; this.target=target; } display() { /* ... */ }}
+class ShieldEffect { constructor(x, y, z, angle) { this.pos = createVector(x, y, z); this.angle = angle; this.startTime = millis(); this.duration = 300; } isFinished() { return millis() - this.startTime > this.duration; } update() {} display() { let progress = (millis() - this.startTime) / this.duration; let alpha = map(progress, 0, 1, 200, 0); let size = map(progress, 0, 1, 50, 80); push(); translate(this.pos.x, this.pos.y, this.pos.z); rotateY(this.angle); translate(0, 0, -30); noFill(); stroke(0, 150, 255, alpha); strokeWeight(4); arc(0, 0, size, size, -HALF_PI, HALF_PI); pop(); } }
+class ParryEffect { constructor(x, y, z) { this.pos = createVector(x, y-80, z); this.startTime = millis(); this.duration = 200; } isFinished() { return millis() - this.startTime > this.duration; } update() {} display() { let progress = (millis() - this.startTime) / this.duration; let alpha = map(progress, 0, 1, 255, 0); let size = map(progress, 0, 1, 20, 100); push(); translate(this.pos.x, this.pos.y, this.pos.z); noFill(); stroke(255, 255, 0, alpha); strokeWeight(5); sphere(size); pop(); } }
+class TornadoEffect extends MagicBolt { constructor(x, y, z, angle, damage, owner, target){ super(x, y, z, angle, damage, owner, target); this.vel.mult(0.5); } display(){ push(); translate(this.pos.x, this.pos.y, this.pos.z); rotateY(millis() * 0.01); noStroke(); fill(150, 150, 150, 100); cone(80, -200); pop(); } }
+class DashEffect { constructor(x, z, angle){ this.pos = createVector(x, 50, z); this.angle = angle; this.startTime = millis(); this.duration = 200; } isFinished() { return millis() - this.startTime > this.duration; } update(){} display(){ push(); translate(this.pos.x, this.pos.y - 120, this.pos.z); rotateY(this.angle); let progress = (millis() - this.startTime) / this.duration; let alpha = map(progress, 0, 1, 200, 0); fill(255, 255, 255, alpha); noStroke(); plane(150, 10); pop(); } }
+class WhirlwindEffect { constructor(x, y, z) { this.pos = createVector(x, y, z); this.startTime = millis(); this.duration = 1000; } isFinished() { return millis() - this.startTime > this.duration; } update() {} display() { let progress = (millis() - this.startTime) / this.duration; let alpha = map(sin(progress * PI), 0, 1, 0, 150); let radius = map(progress, 0, 1, 50, 250); push(); translate(this.pos.x, this.pos.y, this.pos.z); rotateX(HALF_PI); noFill(); stroke(255, 255, 200, alpha); strokeWeight(15); ellipse(0, 0, radius * 2, radius * 2); pop(); } }
+class ProtectionAura { constructor(targetPlayer) { this.player = targetPlayer; this.startTime = millis(); this.duration = 7000; } isFinished() { return !this.player.isProtected || millis() - this.startTime > this.duration; } update() {} display() { if (!this.player.isProtected) return; let alpha = 100 + sin(millis() * 0.005) * 50; push(); translate(this.player.x, this.player.y - this.player.legLength, this.player.z); noStroke(); fill(255, 215, 0, alpha); sphere(this.player.bodyHeight); pop(); } }
+class DamageIndicator { constructor(x, y, z, damage) { this.pos = createVector(x, y, z); this.damage = damage; this.startTime = millis(); this.duration = 1000; } isFinished() { return millis() - this.startTime > this.duration; } update() { this.pos.y -= 1; } display() { push(); translate(this.pos); let camAngle = atan2(cameraPosition.x - this.pos.x, cameraPosition.z - this.pos.z); rotateY(camAngle); let progress = (millis() - this.startTime) / this.duration; let alpha = map(progress, 0.5, 1, 255, 0); fill(255, 0, 0, alpha); stroke(0, alpha); strokeWeight(2); textSize(24); textAlign(CENTER, CENTER); text(floor(this.damage), 0, 0); pop(); } }
+class Shop { constructor(){ this.stock = []; this.generateStock(); } generateStock(){ this.stock = []; for(let i=0; i<10; i++){ this.stock.push(random() > 0.5 ? new Weapon() : new Armor()); } } display(){ push(); resetMatrix(); ortho(); fill(0,0,0,200); rect(-width/2, -height/2, width, height); textSize(32); fill(255); textAlign(CENTER, CENTER); text("상점 (P 또는 ESC로 닫기)", 0, -height/2 + 50); textAlign(LEFT, TOP); for(let i=0; i<this.stock.length; i++){ let item = this.stock[i]; let x = -width/2 + 50; let y = -height/2 + 120 + i * 45; push(); translate(x + 20, y + 15, 0); fill(...item.tier.color); if(item instanceof Weapon) box(20); else sphere(10); pop(); fill(...item.tier.color); textSize(14); text(`[${item.tier.name}] ${item.name}`, x + 50, y); fill(255, 215, 0); text(`가격: ${floor(item.price)} 코인 (클릭하여 구매)`, x + 50, y + 18); } pop(); } handleClick(mx, my){ let ui_mx = mx - width/2; let ui_my = my - height/2; for(let i=0; i<this.stock.length; i++){ let x = -width/2 + 50; let y = -height/2 + 120 + i * 45; if(ui_mx > x && ui_mx < x + 400 && ui_my > y && ui_my < y + 45){ let item = this.stock[i]; if(player.coins >= item.price){ player.coins -= item.price; let slot = (item instanceof Weapon) ? 'weapon' : item.part; player.equip(item, slot); this.stock.splice(i, 1); break; } } } } }
+class NPC { constructor(x,y,z){ this.x=x; this.y=y; this.z=z; this.size = 80; this.quest = new Quest("초보 사냥꾼","이 지역의 몬스터 5마리를 처치해주게.",{type: 'kill', target: 'monster', amount: 5},{type: 'coin', amount: 50}); } display(){ push(); translate(this.x, this.y, this.z); fill(50, 200, 50); box(this.size); if(this.isPlayerClose()){ fill(255); textSize(16); textAlign(CENTER); text("F", 0, -this.size); } pop(); } isPlayerClose(){ return dist(this.x, this.z, player.x, player.z) < this.size * 1.5; } displayQuestUI() { push(); resetMatrix(); ortho(); fill(0,0,0,220); rect(-250, -150, 500, 300); textAlign(CENTER, CENTER); fill(255, 215, 0); textSize(24); text(`[ ${this.quest.title} ]`, 0, -120); fill(255); textSize(16); text(this.quest.description, 0, -80); text(`목표: 몬스터 처치 (${player.questProgress.monsterKills} / ${this.quest.goal.amount})`, 0, -50); text(`보상: ${this.quest.reward.amount} 코인`, 0, -20); if(!this.quest.isActive) {fill(180, 255, 180); text("수락 (A)", -80, 50); } if(this.quest.isComplete) { fill(180, 255, 180); text("완료 보고 (C)", 80, 50); } fill(255); text("닫기 (F 또는 ESC)", 0, 100); pop(); } acceptQuest() { if(!this.quest.isActive) { this.quest.isActive = true; this.quest.isComplete = false; player.questProgress.monsterKills = 0; gameState = 'LOBBY'; } } completeQuest() { if(this.quest.isComplete){ player.coins += this.quest.reward.amount; this.quest.isActive = false; this.quest.isComplete = false; player.questProgress.monsterKills = 0; gameState = 'LOBBY'; } } }
+class Quest { constructor(title, desc, goal, reward){ this.title=title; this.description=desc; this.goal=goal; this.reward=reward; this.isActive = false; this.isComplete = false; } checkCompletion(playerProgress){ if(this.isActive && !this.isComplete){ if(playerProgress.monsterKills >= this.goal.amount) this.isComplete = true; } } }
+
+// ----------------------------------
+// 5. 클래스 목록 변수
+// ----------------------------------
+const monsterSets = [ { melee: SkeletonSoldier, ranged: SkeletonMage }, { melee: RestlessSoul, ranged: SoulWhisper }, { melee: RockGolem, ranged: RuneCaster }, { melee: VenomousSerpent, ranged: SpittingCobra }, { melee: RisenDead, ranged: AcolyteOfMalakor }, { melee: ScrapDrone, ranged: LaserTurret }, { melee: IceElemental, ranged: FrostSprite }, { melee: FireImp, ranged: MagmaSlinger }, { melee: ShadeStalker, ranged: PhantomArcher }, { melee: Voidling, ranged: OcularSentry }, { melee: YoungWyvern, ranged: YoungStormDragon } ];
+const bossList = [ { stage: 10, class: SamuraiBoss, reward: {name: '요도'} }, { stage: 20, class: SoulKingBoss, reward: {name: '영혼의 대검'} }, { stage: 30, class: GolemSentry, reward: {name: '거인의 핵 해머'} }, { stage: 40, class: AbyssStalker, reward: {name: '심연의 독이빨'} }, { stage: 50, class: ArchlichMalakor, reward: {name: '리치의 지팡이'} }, { stage: 60, class: IronAnnihilator, reward: {name: '강철 파쇄기'} }, { stage: 70, class: FrostTitan, reward: {name: '서리 거인의 도끼'} }, { stage: 80, class: FlameLord, reward: {name: '화염 군주의 검'} }, { stage: 90, class: ShadowBlade, reward: {name: '그림자 비수'} }, { stage: 100, class: VoidGazer, reward: {name: '공허의 눈'} }, { stage: 110, class: SkyfireDragon, reward: {name: '천공의 발톱'} } ];
+
+// ===================================================================
+// p5.js 기본 함수
+// ===================================================================
+function setup() { createCanvas(800, 600, WEBGL); player = new Player(0, 50, 0); gameStartPortal = { x: 0, y: 0, z: -150, size: 60 }; shop = new Shop(); npc = new NPC(-100, 0, 50); document.oncontextmenu = () => false; }
+function draw() { background(150, 200, 255); perspective(PI / 2.4, width / height, camDist / 10, camDist * 10); handleCamera(); setupLights(); for (let i = visualEffects.length - 1; i >= 0; i--) { let v = visualEffects[i]; v.update(); v.display(); if (v.isFinished()) visualEffects.splice(i, 1); } switch (gameState) { case 'LOBBY': drawLobby(); player.update(); player.display(); npc.display(); checkGameStart(); break; case 'PLAYING': case 'BOSS_FIGHT': drawEnvironment(); runGameLogic(); updateTimers(); break; case 'SHOP_OPEN': drawLobby(); player.update(); player.display(); npc.display(); shop.display(); break; case 'QUEST_UI': drawLobby(); player.update(); player.display(); npc.display(); npc.displayQuestUI(); break; } displayHUD(); checkPlayerDeath(); }
+
+// ===================================================================
+// 게임 진행 및 로직 함수
+// ===================================================================
+function startStage() { gameState = 'PLAYING'; survivalTimer = 0; bossSpawnTimer = 0; if (gameCycle === 1) { currentStage = 1; monsterStatMultiplier = 1.0; } hazards = []; boss = null; monsters = []; spawnMonsters(currentStage); }
+function enterNewGamePlus() { gameCycle++; currentStage = 0; monsterStatMultiplier = 1.0 * (gameCycle * 2); hazards = []; boss = null; monsters = []; gameState = 'LOBBY'; player.x = 0; player.z = 0; }
+function nextStage() { 
+    currentStage++; 
+    monsterStatMultiplier += 0.1 * gameCycle; 
+    hazards = []; 
+    boss = null; 
+    monsters = []; 
+    gameState = 'PLAYING'; 
+    spawnMonsters(currentStage); 
+}
+function spawnTimedBoss() {
+    const bossData = bossList.find(b => b.stage >= currentStage);
+
+    if (bossData) {
+        monsters = [];
+        hazards = [];
+        gameState = 'BOSS_FIGHT';
+        boss = new bossData.class(0, 50, 0);
+
+        if (bossData.stage === 10) {
+            boss.maxHp *= 0.3;
+            boss.hp = boss.maxHp;
+            boss.damage *= 0.3;
+        }
+        currentStage = bossData.stage;
+    }
+}
+function spawnMonsters(stage) { monsters = []; let numMonsters = 2 + floor(stage / 2); let themeIndex = floor((stage - 1) / 10); let monsterTheme = monsterSets[themeIndex % monsterSets.length] || monsterSets[0]; for (let i = 0; i < numMonsters; i++) { let monsterX = random(-wallSize / 2 + 50, wallSize / 2 - 50); let monsterZ = random(-wallSize / 2 + 50, wallSize / 2 - 50); if (random() < 0.4) monsters.push(new monsterTheme.ranged(monsterX, 50, monsterZ)); else monsters.push(new monsterTheme.melee(monsterX, 50, monsterZ)); } }
+function runGameLogic() { player.update(); player.display(); if (player.lockedOnTarget && player.lockedOnTarget.hp <= 0) player.lockedOnTarget = null; if (boss) { if(boss.hp > 0) { boss.update(); boss.display(); } } else { for (let i = monsters.length - 1; i >= 0; i--) { if (monsters[i].hp > 0) { monsters[i].update(); monsters[i].display(); } else { if(player.lockedOnTarget === monsters[i]) player.lockedOnTarget = null; if(npc.quest.isActive) player.questProgress.monsterKills++; player.gainExp(monsters[i].expValue); monsters.splice(i, 1); } } } for (let i = projectiles.length - 1; i >= 0; i--) { let p = projectiles[i]; p.update(); p.display(); let targets = (p.owner instanceof Player) ? (boss ? [boss] : monsters) : [player]; let hitTarget = p.checkHit(targets); if (p.isOffScreen() || hitTarget) { if(hitTarget) hitTarget.takeDamage(p.damage, p.owner); projectiles.splice(i, 1); } } for (let i = hazards.length - 1; i >= 0; i--) { let h = hazards[i]; h.update(); h.display(); h.checkCollision(player); if(h.isFinished && h.isFinished()) hazards.splice(i, 1); } handleCombat(); }
+function handleCombat() { if (boss && boss.hp <= 0) { player.coins += boss.coinValue || 500; player.gainExp(boss.expValue); const bossData = bossList.find(b => boss instanceof b.class); if (bossData && bossData.reward) player.addBossWeapon(bossData.reward); if (currentStage === bossList[bossList.length - 1].stage) enterNewGamePlus(); else { boss = null; setTimeout(nextStage, 2000); } } else if (!boss && monsters.length === 0 && gameState === 'PLAYING') nextStage(); }
+function updateTimers() {
+    survivalTimer++;
+    player.coins += (10 / 3600);
+
+    if (gameState === 'PLAYING' && !boss) {
+        bossSpawnTimer++;
+    }
+
+    if (bossSpawnTimer > BOSS_SPAWN_INTERVAL) {
+        bossSpawnTimer = 0;
+        spawnTimedBoss();
+    }
+}
+
+// ===================================================================
+// 맵 & 카메라 & 조명 & 기타 함수
+// ===================================================================
+function drawLobby() { push(); translate(0, 50, 0); rotateX(HALF_PI); fill(150, 150, 150); noStroke(); plane(lobbyWallSize, lobbyWallSize); pop(); drawWalls(lobbyWallSize); push(); translate(gameStartPortal.x, gameStartPortal.y, gameStartPortal.z); fill(0, 150, 255, 150); stroke(255); rotateY(millis() * 0.002); sphere(gameStartPortal.size / 2); pop(); }
+function checkGameStart() { if (dist(player.x, player.z, gameStartPortal.x, gameStartPortal.z) < gameStartPortal.size / 2 + player.bodyWidth / 2) startStage(); }
+function drawEnvironment(){ push(); translate(0, 50, 0); rotateX(HALF_PI); fill(120, 180, 120); noStroke(); plane(wallSize, wallSize); pop(); drawWalls(wallSize); }
+function drawWalls(size) { push(); noStroke(); fill(50, 50, 50); translate(0, -wallHeight/2 + 50, 0); push(); translate(0, 0, -size/2); box(size, wallHeight, 20); pop(); push(); translate(0, 0, size/2); box(size, wallHeight, 20); pop(); push(); translate(-size/2, 0, 0); rotateY(HALF_PI); box(size, wallHeight, 20); pop(); push(); translate(size/2, 0, 0); rotateY(HALF_PI); box(size, wallHeight, 20); pop(); pop(); }
+
+function triggerCameraShake(magnitude, duration) {
+    camShakeMagnitude = magnitude;
+    camShakeDuration = duration;
+    camShakeStartTime = millis();
+}
+function handleCamera() {
+    let camTarget = createVector(player.x, player.groundY - 80, player.z);
+    if (keyIsDown(LEFT_ARROW))  { camAngleX -= camRotationSpeed; }
+    if (keyIsDown(RIGHT_ARROW)) { camAngleX += camRotationSpeed; }
+    if (keyIsDown(UP_ARROW))    { camAngleY += camRotationSpeed; }
+    if (keyIsDown(DOWN_ARROW))  { camAngleY -= camRotationSpeed; }
+    camAngleY = constrain(camAngleY, -PI/4, PI/4);
+
+    let camX = camTarget.x + camDist * cos(camAngleY) * sin(camAngleX);
+    let camY = camTarget.y + camDist * sin(camAngleY);
+    let camZ = camTarget.z + camDist * cos(camAngleY) * cos(camAngleX);
+
+    if (millis() < camShakeStartTime + camShakeDuration) {
+        let elapsed = millis() - camShakeStartTime;
+        let currentMagnitude = camShakeMagnitude * (1 - (elapsed / camShakeDuration));
+        camX += random(-currentMagnitude, currentMagnitude);
+        camY += random(-currentMagnitude, currentMagnitude);
+        camZ += random(-currentMagnitude, currentMagnitude);
+    }
+
+    cameraPosition = createVector(camX, camY, camZ);
+    camera(camX, camY, camZ, camTarget.x, camTarget.y, camTarget.z, 0, 1, 0);
+}
+
+function setupLights(){ ambientLight(150); directionalLight(255, 255, 255, 0, -1, -1); }
+function checkPlayerDeath() { if (player.hp <= 0) player.respawn(); }
+
+// ===================================================================
+// 사용자 입력 처리
+// ===================================================================
+function keyPressed(e) {
+  switch(gameState){
+      case 'LOBBY': if (keyCode === 80) gameState = 'SHOP_OPEN'; if (npc.isPlayerClose() && keyCode === 70) { npc.quest.checkCompletion(player.questProgress); gameState = 'QUEST_UI'; } break;
+      case 'PLAYING': case 'BOSS_FIGHT':
+        if (keyCode === 32) player.performSpinSlash();
+        if (keyCode === 82) player.useSkill('dash');
+        if (keyCode === 69) player.useUniqueSkill();
+        if (keyCode === 81) player.useSkill('protection');
+        if (keyCode === 49) player.useHealthPotion();
+        if (keyCode === 50) player.useManaPotion();
+        if (keyCode === SHIFT) player.performEvasion();
+        if (keyCode >= 49 && keyCode <= 57) player.equipBossWeapon(keyCode - 49);
+        else if (keyCode === 48) player.equipBossWeapon(9);
+        else if (keyCode === 189) player.equipBossWeapon(10);
+        if (keyCode === 9) { player.toggleLockOn(); e.preventDefault(); }
+        break;
+      case 'SHOP_OPEN': if (keyCode === 80 || keyCode === 27) gameState = 'LOBBY'; break;
+      case 'QUEST_UI': if (keyCode === 70 || keyCode === 27) gameState = 'LOBBY'; if (keyCode === 65) npc.acceptQuest(); if (keyCode === 67) npc.completeQuest(); break;
+  }
+}
+function mousePressed() { if (gameState === 'SHOP_OPEN') { shop.handleClick(mouseX, mouseY); return; } if (gameState !== 'PLAYING' && gameState !== 'BOSS_FIGHT') return; if (mouseButton === LEFT) player.startChargeAttack(); if (mouseButton === RIGHT) player.startParry(); }
+function mouseReleased() { if (gameState !== 'PLAYING' && gameState !== 'BOSS_FIGHT') return; if (mouseButton === LEFT) player.releaseChargeAttack(); if (mouseButton === RIGHT) player.stopParryOrBlock(); }
+
+// ===================================================================
+// UI/HUD 함수
+// ===================================================================
+function displayHUD() {
+    resetMatrix(); ortho(); textFont('sans-serif');
+    let cX = -width / 2 + 20; let cY = -height / 2 + 20; let bW = 200; let bH = 20; let tO = 4;
+    textAlign(LEFT, CENTER); textSize(16); fill(255); text(`Cycle ${gameCycle} - LV. ${player.level}`, cX, cY);
+    fill(50); rect(cX, cY + 30, bW, bH); fill(0, 255, 0); rect(cX, cY + 30, bW * (player.hp / player.maxHp), bH); fill(0); text(`HP: ${ceil(player.hp)}/${player.maxHp}`, cX + 5, cY + 30 + bH/2 - tO);
+    fill(50); rect(cX, cY + 60, bW, bH); fill(255, 255, 0); rect(cX, cY + 60, bW * (player.stamina / player.maxStamina), bH); fill(0); text(`ST: ${ceil(player.stamina)}/${player.maxStamina}`, cX + 5, cY + 60 + bH/2 - tO);
+    fill(50); rect(cX, cY + 90, bW, bH); fill(0, 0, 255); rect(cX, cY + 90, bW * (player.mana / player.maxMana), bH); fill(255); text(`MP: ${ceil(player.mana)}/${player.maxMana}`, cX + 5, cY + 90 + bH/2 - tO);
+    fill(50); rect(cX, cY + 120, bW, 10); fill(200, 0, 255); rect(cX, cY + 120, bW * (player.exp / player.expToNextLevel), 10);
+    fill(255, 215, 0); text(`코인: ${floor(player.coins)}`, cX, cY + 145);
+    fill(255, 100, 100); text(`[1] HP Potion: ${player.healthPotions}`, cX, cY + 165);
+    fill(100, 100, 255); text(`[2] MP Potion: ${player.manaPotions}`, cX, cY + 185);
+    
+    let skills = player.skills; let skillY = -height/2 + height - 150;
+    fill(255); text(`[Q] ${skills.protection.name}`, cX, skillY); if (!skills.protection.isReady()) { let cd = (skills.protection.cooldown - (millis() - skills.protection.lastUsedTime))/1000; fill(255, 100, 100); text(`${cd.toFixed(1)}s`, cX + 180, skillY); }
+    skillY += 25; fill(255); text(`[R] ${skills.dash.name}`, cX, skillY); if (!skills.dash.isReady()) { let cd = (skills.dash.cooldown - (millis() - skills.dash.lastUsedTime))/1000; fill(255, 100, 100); text(`${cd.toFixed(1)}s`, cX + 180, skillY); }
+    if(player.uniqueSkill) { skillY += 25; fill(255, 180, 255); text(`[E] ${player.uniqueSkill.name}`, cX, skillY); if (!player.uniqueSkill.isReady()) { let cd = (player.uniqueSkill.cooldown - (millis() - player.uniqueSkill.lastUsedTime))/1000; fill(255, 100, 100); text(`${cd.toFixed(1)}s`, cX + 180, skillY); } }
+
+    let buffY = skillY + 40;
+    let buffIndex = 0;
+    for (const buffName in player.buffs) {
+        const buff = player.buffs[buffName];
+        const remainingTime = (buff.endTime - millis()) / 1000;
+        if (buffName === 'protection') fill(255, 215, 0);
+        else if (buffName === 'overdrive') fill(255, 100, 0);
+        else fill(255);
+        text(`${buff.displayName}: ${remainingTime.toFixed(1)}s`, cX, buffY + (buffIndex * 25));
+        buffIndex++;
+    }
+
+    textAlign(RIGHT, CENTER); const keyMap = ['3','4','5','6','7','8','9','0','-','='];
+    for(let i=0; i<player.bossWeapons.length; i++) { let key = keyMap[i] || '?'; if(player.activeBossWeaponIndex === i) fill(255, 255, 0); else fill(255); text(`[${key}] ${player.bossWeapons[i].name}`, width/2 - 20, -height/2 + 50 + i * 25); }
+    if(gameState === 'PLAYING' || gameState === 'BOSS_FIGHT') { textAlign(CENTER, CENTER); textSize(24); fill(255); text(`Stage ${currentStage}`, 0, -height/2 + 30); }
+    if(boss && boss.hp > 0) {
+        let barWidth = width * 0.7; let barHeight = 30; let barX = -barWidth / 2; let barY = height/2 - 60;
+        const bossData = bossList.find(b => boss instanceof b.class);
+        let bossName = bossData ? bossData.reward.name.split(" ").slice(0,-1).join(" ") + " 보스" : "알 수 없는 보스";
+        textAlign(CENTER, CENTER); textSize(20); fill(255); text(bossName, 0, barY - 25);
+        fill(50,0,0,200); rect(barX, barY, barWidth, barHeight);
+        let hpRatio = boss.hp / boss.maxHp; fill(255,0,0); rect(barX, barY, barWidth * hpRatio, barHeight);
+        textSize(16); fill(255); text(`${ceil(boss.hp)} / ${ceil(boss.maxHp)}`, 0, barY + barHeight/2);
+    }
+}
